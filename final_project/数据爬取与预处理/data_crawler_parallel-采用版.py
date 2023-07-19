@@ -109,20 +109,26 @@ class MedicalSpider:
     """线程函数，并行执行单元"""
 
     def process_page(self, page):
+        # 使用 data 作为字典参数，向 csv 文件中添加数据
+        data = {}
+
+        # 记录当前页是否爬取失败
+        failed = False
+
+        # 记录错误的来源
+        error = []
+
         # 由于可能出现部分网页不规范的情况，需要放在 try 环境中，以防爬虫终止
+        basic_url = "http://jib.xywy.com/il_sii/gaishu/%s.htm" % page
+        cause_url = "http://jib.xywy.com/il_sii/cause/%s.htm" % page
+        prevent_url = "http://jib.xywy.com/il_sii/prevent/%s.htm" % page
+        symptom_url = "http://jib.xywy.com/il_sii/symptom/%s.htm" % page
+        inspect_url = "http://jib.xywy.com/il_sii/inspect/%s.htm" % page
+        food_url = "http://jib.xywy.com/il_sii/food/%s.htm" % page
+        drug_url = "http://jib.xywy.com/il_sii/drug/%s.htm" % page
+
+        """基本信息：疾病的种类、名称、描述等"""
         try:
-            basic_url = "http://jib.xywy.com/il_sii/gaishu/%s.htm" % page
-            cause_url = "http://jib.xywy.com/il_sii/cause/%s.htm" % page
-            prevent_url = "http://jib.xywy.com/il_sii/prevent/%s.htm" % page
-            symptom_url = "http://jib.xywy.com/il_sii/symptom/%s.htm" % page
-            inspect_url = "http://jib.xywy.com/il_sii/inspect/%s.htm" % page
-            food_url = "http://jib.xywy.com/il_sii/food/%s.htm" % page
-            drug_url = "http://jib.xywy.com/il_sii/drug/%s.htm" % page
-
-            # ! 使用 data 作为字典参数，向 csv 文件中添加数据
-            data = {}
-
-            """基本信息：疾病的种类、名称、描述等"""
             basic_info = self.basicinfo_spider(basic_url)
             data["category"], data["name"], data["desc"], attributes = (
                 basic_info["category"],
@@ -130,10 +136,16 @@ class MedicalSpider:
                 basic_info["desc"],
                 basic_info["attributes"],
             )
+        except:
+            print("第 {} 页爬取失败".format(page))
+            return
+
+        """属性信息的提取"""
+        try:
             # 使用冒号进行分词，将各个属性分出来
             # 这里已经把 treat 板块下的属性提取了，所以我们不需要爬取 treat 板块下的数据
             for attr in attributes:
-                attr_pair = attr.split("：")
+                attr_pair = attr.split("：", 1)  # ! 太坑了，这里只能分一个冒号
                 # print(attr_pair)
                 if len(attr_pair) == 2:
                     key = attr_pair[0]
@@ -150,17 +162,25 @@ class MedicalSpider:
                             "cure_lasttime",
                             "cured_prob",
                         ]:
-                            data[self.key_dict[key]] = value.replace(" ", "").replace(
-                                "\t", ""
+                            data[self.key_dict[key]] = (
+                                value.replace(" ", "")
+                                .replace("\t", "")
+                                .replace("\r", "")
+                                .replace("\n", "")
+                                .replace("\xa0", "")
                             )
-                        # 按空格分词
+                        # 按空格、顿号分词
                         if self.key_dict[key] in [
                             "cure_department",
                             "cure_way",
                             "common_drug",
                         ]:
+                            split_by_space = value.split(" ")  # 按空格分词
                             data[self.key_dict[key]] = [
-                                i for i in value.split(" ") if i
+                                sub_item.strip()
+                                for item in split_by_space
+                                for sub_item in item.split("、")
+                                if sub_item.strip()
                             ]
 
             """我们现在还需要对并发症进行分词"""
@@ -170,20 +190,36 @@ class MedicalSpider:
                     for i in self.disease_cuter.max_forward_cut(str(data["acompany"]))
                     if len(i) > 1
                 ]
+        except:
+            error += ["疾病的部分属性不存在"]
+            failed = True
 
-            """发病原因"""
+        """发病原因"""
+        try:
             data["cause"] = self.common_spider(cause_url)
+        except:
+            error += ["发病原因不存在"]
+            failed = True
 
-            """预防措施"""
+        """预防措施"""
+        try:
             data["prevent"] = self.common_spider(prevent_url)
+        except:
+            error += ["预防措施不存在"]
+            failed = True
 
-            """症状以及具体描述"""
+        """症状以及具体描述"""
+        try:
             data["symptoms"], data["symptoms_detail"] = self.symptom_spider(symptom_url)
 
             # 症状关键词需要进行 NLP 分词提取
             data["symptoms"] = symptom_text_segmenter(data["symptoms_detail"])
+        except:
+            error += ["症状以及具体描述不存在"]
+            failed = True
 
-            """检查项目"""
+        """检查项目"""
+        try:
             inspect_info = self.inspect_spider(inspect_url)
             inspectstring = "b".join(inspect_info)
             inspects = [
@@ -192,8 +228,12 @@ class MedicalSpider:
                 if len(i) > 1
             ]
             data["check"] = inspects
+        except:
+            error += ["检查项目不存在"]
+            failed = True
 
-            """食物"""
+        """食物"""
+        try:
             food_info = self.food_spider(food_url)
             if food_info:
                 data["do_eat"], data["not_eat"], data["recommend_eat"] = (
@@ -201,22 +241,37 @@ class MedicalSpider:
                     food_info["bad"],
                     food_info["recommend"],
                 )
+        except:
+            error += ["食物信息不存在"]
+            failed = True
 
-            """药品"""
+        """药品"""
+        try:
             drug_info = self.drug_spider(drug_url)
             data["recommend_drug"] = list(
                 set([i.split("(")[-1].replace(")", "") for i in drug_info])
             )
             data["drug_detail"] = drug_info
+        except:
+            error += ["药品信息不存在"]
+            failed = True
 
-            # 删除 data 中的 symptoms_detail，因为我们并不需要提取这一属性
+        # 删除 data 中的 symptoms_detail，因为我们并不需要提取这一属性
+        # 这里的 try 只是防止 data 中没有 symptoms_detail，并不需要更新错误信息 error
+        try:
             del data["symptoms_detail"]
-
-            print(page, basic_url)
-            return data
-
         except:
             pass
+
+        if failed:
+            if data:
+                print("第 {} 页爬取部分失败，原因有：".format(page), str("，".join(error)))
+            else:
+                print("第 {} 页爬取失败".format(page))
+        else:
+            print("第 {} 页爬取成功".format(page))
+
+        return data
 
     """清除掉现有的 csv 文件，方便之后重新以追加形式写入新 csv 文件中"""
 
@@ -255,6 +310,7 @@ class MedicalSpider:
             "cause",
             "prevent",
             "desc",
+            "get_prob",
         ]
 
         """采用 ThreadPoolExecutor 进行多线程加速"""
@@ -282,6 +338,7 @@ class MedicalSpider:
                         "cause": data["cause"],
                         "prevent": data["prevent"],
                         "desc": data["desc"],
+                        "get_prob": data["get_prob"],
                     }
                     illness_list.append(illness_node)
                 except:
@@ -344,13 +401,13 @@ class MedicalSpider:
                 except:
                     pass
 
-                # 治疗药物
+                # 推荐药物
                 try:
                     for name in data["recommend_drug"]:
                         drug_node = {"label": "药物", "name": name}
                         node_list.append(drug_node)
                         drug_relation = {
-                            "label": "治疗药物",
+                            "label": "推荐药物",
                             "start": data["name"],
                             "end": name,
                         }
@@ -583,4 +640,4 @@ class MedicalSpider:
 
 
 handler = MedicalSpider()
-handler.parallelize_processing(11000)
+handler.parallelize_processing(20)
