@@ -1,5 +1,7 @@
-# finally_project
-实习实训最终项目
-来自NKU的21级的神龙无敌队（冯思程、陈冠修、郭昱杰、杜旖芃）
-# 得分
-冯思程97、杜旖芃98...
+# Finally_Project for INTERSHIP
+## Author
+冯思程(Team Leader)、陈冠修、郭昱杰、杜旖芃
+## Score
+冯思程97...
+## Lisence
+free to use for personal research
